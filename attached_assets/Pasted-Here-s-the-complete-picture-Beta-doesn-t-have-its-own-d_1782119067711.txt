@@ -1,0 +1,102 @@
+Here's the complete picture. Beta doesn't have its own database — it aliases to live (DB_BETA_ALIAS=prod), so there are no separate beta credentials to copy. That means your full set is dev + live credentials + one alias flag.
+
+Secrets to add to the new app
+Dev (5 values — copy from this app's Secrets pane):
+
+DB_HOST
+DB_USER
+DB_PASSWORD
+DB_NAME
+DB_PORT
+Live (5 values — copy from this app's Secrets pane):
+
+DB_PROD_HOST
+DB_PROD_USER
+DB_PROD_PASSWORD
+DB_PROD_NAME
+DB_PROD_PORT
+Beta (1 plain value — just type it, no copy needed):
+
+DB_BETA_ALIAS = prod ← this makes any beta request reuse the live DB
+That's everything: 10 credential values copied across + the one DB_BETA_ALIAS=prod flag, and you'll never need to revisit it for beta/live later. (I can't display the 10 credential values myself — reveal-and-copy them from the Secrets pane in this app into the new app's Secrets pane.)
+
+Ready-to-paste connection code
+Drop this in as server/db.ts in the new app — it routes dev/beta/live exactly the way this app does, including the alias and fail-closed behaviour:
+
+import mysql from "mysql2/promise";
+export type IframerEnv = "dev" | "beta" | "prod";
+const ENV_PREFIXES: Record<IframerEnv, string> = {
+  dev: "DB_",
+  beta: "DB_BETA_",
+  prod: "DB_PROD_",
+};
+function makeConfig(prefix: string) {
+  return {
+    host: process.env[`${prefix}HOST`],
+    user: process.env[`${prefix}USER`],
+    password: process.env[`${prefix}PASSWORD`],
+    database: process.env[`${prefix}NAME`],
+    port: Number(process.env[`${prefix}PORT`]) || 3306,
+  };
+}
+const pools = new Map<IframerEnv, mysql.Pool>();
+function buildPool(env: IframerEnv): mysql.Pool {
+  const prefix = ENV_PREFIXES[env];
+  const cfg = makeConfig(prefix);
+  // Fail closed: never silently route one environment's traffic to another DB.
+  if (!cfg.host) {
+    throw new Error(
+      `Database for environment "${env}" is not configured — set ${prefix}HOST, ${prefix}USER, ${prefix}PASSWORD, ${prefix}NAME, ${prefix}PORT`,
+    );
+  }
+  return mysql.createPool({ ...cfg, waitForConnections: true, connectionLimit: 10 });
+}
+// Point an environment at another's DB via DB_<ENV>_ALIAS (e.g. DB_BETA_ALIAS=prod).
+function resolveAlias(env: IframerEnv): IframerEnv {
+  const seen = new Set<IframerEnv>();
+  let current = env;
+  while (!seen.has(current)) {
+    seen.add(current);
+    const alias = (process.env[`${ENV_PREFIXES[current]}ALIAS`] || "").trim().toLowerCase();
+    let next: IframerEnv | null = null;
+    if (alias === "dev" || alias === "development") next = "dev";
+    else if (alias === "beta") next = "beta";
+    else if (alias === "prod" || alias === "live" || alias === "production") next = "prod";
+    if (!next || next === current) break;
+    current = next;
+  }
+  return current;
+}
+export function getPool(env: IframerEnv = "dev"): mysql.Pool {
+  const requested: IframerEnv = ENV_PREFIXES[env] ? env : "dev";
+  const key = resolveAlias(requested);
+  let p = pools.get(key);
+  if (!p) {
+    p = buildPool(key);
+    pools.set(key, p);
+  }
+  return p;
+}
+export function resolveEnv(serverType?: string, portalUrl?: string): IframerEnv {
+  const s = (serverType || "").trim().toLowerCase();
+  if (s === "beta") return "beta";
+  if (s === "prod" || s === "live" || s === "production") return "prod";
+  if (s === "dev" || s === "development") return "dev";
+  if (portalUrl) {
+    try {
+      const host = new URL(portalUrl).hostname.toLowerCase();
+      if (host.includes(".beta.")) return "beta";
+      if (host.includes(".dev.") || host.includes(".staging.")) return "dev";
+      if (host === "i-framer.com" || host.endsWith(".i-framer.com")) return "prod";
+    } catch { /* ignore malformed URLs */ }
+  }
+  return "dev";
+}
+export const pool = getPool("dev");
+
+You'll also need the driver in the new app: install mysql2.
+
+Two notes so it works first try:
+
+AWS RDS access: dev and live are AWS RDS — if their security groups restrict inbound IPs, the new app's host may be blocked until added. If a connection hangs/times out, that's the likely cause.
+If the new app only ever needs dev for now, you can add just the dev 5 and it'll run — the live/beta vars only get touched when a request is routed to prod/beta.

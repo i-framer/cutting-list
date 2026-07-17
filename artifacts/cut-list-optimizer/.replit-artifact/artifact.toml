@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Cut List Optimizer"
+version = "1.0.0"
+id = "artifacts/cut-list-optimizer"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 26151
+
+[services.development]
+run = "pnpm --filter @workspace/cut-list-optimizer run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/cut-list-optimizer", "run", "build" ]
+publicDir = "artifacts/cut-list-optimizer/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "26151"
+BASE_PATH = "/"

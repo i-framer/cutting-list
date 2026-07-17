@@ -1,0 +1,1 @@
+- [i-framer DB quirks](iframer-db-quirks.md) — component cut dims stored in metres (×1000 for mm); cutting-list join goes via jobline shared PK; always filter big tables by FramerID/SaleID first.
